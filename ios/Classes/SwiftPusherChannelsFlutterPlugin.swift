@@ -36,45 +36,65 @@ public class SwiftPusherChannelsFlutterPlugin: NSObject, FlutterPlugin, PusherDe
 
   func initChannels(call: FlutterMethodCall, result: @escaping FlutterResult) {
     if pusher != nil {
-        pusher.disconnect()
+      pusher.disconnect()
     }
+
     let args = call.arguments as! [String: Any]
+
+    // --- Auth method (endpoint / custom authorizer) + optional headers ---
     var authMethod: AuthMethod = .noMethod
-    if args["authEndpoint"] is String {
-      authMethod = .endpoint(authEndpoint: args["authEndpoint"] as! String)
+    if let endpoint = args["authEndpoint"] as? String {
+      if let headers = args["authHeaders"] as? [String: String] {
+        // PusherSwift: endpoint + request customizer (header ekleme)
+        authMethod = .endpoint(
+          authEndpoint: endpoint,
+          authRequestCustomizer: { (request: inout URLRequest) in
+            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+          }
+        )
+      } else {
+        authMethod = .endpoint(authEndpoint: endpoint)
+      }
     } else if args["authorizer"] is Bool {
+      // Dart tarafında onAuthorizer callback’i var
       authMethod = .authorizer(authorizer: self)
     }
+
+    // --- Host/cluster seçimi ---
     var host: PusherHost = .defaultHost
-    if args["host"] is String {
-      host = .host(args["host"] as! String)
-    } else if args["cluster"] != nil {
-      host = .cluster(args["cluster"] as! String)
+    if let h = args["host"] as? String, !h.isEmpty {
+      host = .host(h)                       // self-hosted: soketi.domain.com
+    } else if let cl = args["cluster"] as? String {
+      host = .cluster(cl)                   // pusher cluster
     }
+
+    // --- TLS/port seçimi ---
+    // ‘encrypted’ verilmişse useTLS’i override edelim; yoksa ‘useTLS’ bakılır.
     var useTLS: Bool = true
-    if args["useTLS"] is Bool {
-      useTLS = args["useTLS"] as! Bool
+    if let enc = args["encrypted"] as? Bool {
+      useTLS = enc
+    } else if let tls = args["useTLS"] as? Bool {
+      useTLS = tls
     }
-    var port: Int
-    if useTLS {
-      port = 443
-      if args["wssPort"] is Int {
-        port = args["wssPort"] as! Int
-      }
-    } else {
-      port = 80
-      if args["wsPort"] is Int {
-        port = args["wsPort"] as! Int
-      }
+
+    var port: Int = useTLS ? 443 : 80
+    if useTLS, let wssPort = args["wssPort"] as? Int {
+      port = wssPort                         // ör: 443
+    } else if !useTLS, let wsPort = args["wsPort"] as? Int {
+      port = wsPort                          // ör: 6001
     }
+
+    // --- Opsiyonel timeouts ve path ---
     var activityTimeout: TimeInterval?
-    if args["activityTimeout"] is TimeInterval {
-      activityTimeout = args["activityTimeout"] as! Double / 1000.0
+    if let at = args["activityTimeout"] as? TimeInterval {
+      activityTimeout = at / 1000.0          // ms → s
     }
     var path: String?
-    if args["path"] is String {
-      path = (args["path"] as! String)
+    if let p = args["path"] as? String {
+      path = p
     }
+
+    // --- Pusher client options ---
     let options = PusherClientOptions(
       authMethod: authMethod,
       host: host,
@@ -83,40 +103,47 @@ public class SwiftPusherChannelsFlutterPlugin: NSObject, FlutterPlugin, PusherDe
       useTLS: useTLS,
       activityTimeout: activityTimeout
     )
+
+    // --- Pusher instance ---
     pusher = Pusher(key: args["apiKey"] as! String, options: options)
-    if args["maxReconnectionAttempts"] is Int {
-      pusher.connection.reconnectAttemptsMax = (args["maxReconnectionAttempts"] as! Int)
+
+    // Reconnect/timeout ayarları
+    if let maxAttempts = args["maxReconnectionAttempts"] as? Int {
+      pusher.connection.reconnectAttemptsMax = maxAttempts
     }
-    if args["maxReconnectGapInSeconds"] is TimeInterval {
-      pusher.connection.maxReconnectGapInSeconds = (args["maxReconnectGapInSeconds"] as! TimeInterval)
+    if let maxGap = args["maxReconnectGapInSeconds"] as? TimeInterval {
+      pusher.connection.maxReconnectGapInSeconds = maxGap
     }
-    if args["pongTimeout"] is Int {
-      pusher.connection.pongResponseTimeoutInterval = args["pongTimeout"] as! TimeInterval / 1000.0
+    if let pongMs = args["pongTimeout"] as? TimeInterval {
+      pusher.connection.pongResponseTimeoutInterval = pongMs / 1000.0
     }
+
     pusher.connection.delegate = self
     pusher.bind(eventCallback: onEvent)
     result(nil)
   }
 
+  // MARK: - Authorizer (Dart tarafındaki onAuthorizer için)
   public func fetchAuthValue(socketID: String, channelName: String, completionHandler: @escaping (PusherAuth?) -> Void) {
     methodChannel!.invokeMethod("onAuthorizer", arguments: [
       "socketId": socketID,
       "channelName": channelName,
     ]) { authData in
-      if authData != nil {
-        let authDataCast = authData as! [String: String]
+      if let authData = authData as? [String: String] {
         completionHandler(
           PusherAuth(
-            auth: authDataCast["auth"]!,
-            channelData: authDataCast["channel_data"],
-            sharedSecret: authDataCast["shared_secret"]
-          ))
+            auth: authData["auth"]!,
+            channelData: authData["channel_data"],
+            sharedSecret: authData["shared_secret"]
+          )
+        )
       } else {
         completionHandler(nil)
       }
     }
   }
 
+  // MARK: - Delegate
   public func changedConnectionState(from old: ConnectionState, to new: ConnectionState) {
     methodChannel.invokeMethod("onConnectionStateChange", arguments: [
       "previousState": old.stringValue(),
@@ -160,6 +187,7 @@ public class SwiftPusherChannelsFlutterPlugin: NSObject, FlutterPlugin, PusherDe
     )
   }
 
+  // MARK: - Connection
   func connect(result: @escaping FlutterResult) {
     pusher.connect()
     result(nil)
@@ -174,6 +202,7 @@ public class SwiftPusherChannelsFlutterPlugin: NSObject, FlutterPlugin, PusherDe
     result(pusher.connection.socketId)
   }
 
+  // MARK: - Subscription & Events
   func onEvent(event: PusherEvent) {
     var userId: String?
     if event.eventName == "pusher:subscription_succeeded" {
