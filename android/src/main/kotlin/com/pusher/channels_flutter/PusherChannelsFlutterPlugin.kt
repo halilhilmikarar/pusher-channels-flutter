@@ -100,25 +100,50 @@ class PusherChannelsFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAw
             if (pusher != null) {
                 pusher!!.disconnect()
             }
+
+            // ---------- PusherOptions ----------
             val options = PusherOptions()
-            if (call.argument<String>("cluster") != null) options.setCluster(call.argument("cluster"))
-            if (call.argument<Boolean>("useTLS") != null) options.isUseTLS =
-                call.argument("useTLS")!!
-            if (call.argument<Long>("activityTimeout") != null) options.activityTimeout =
-                call.argument("activityTimeout")!!
-            if (call.argument<Long>("pongTimeout") != null) options.pongTimeout =
-                call.argument("pongTimeout")!!
-            if (call.argument<Int>("maxReconnectionAttempts") != null) options.maxReconnectionAttempts =
-                call.argument("maxReconnectionAttempts")!!
-            if (call.argument<Int>("maxReconnectGapInSeconds") != null) options.maxReconnectGapInSeconds =
-                call.argument("maxReconnectGapInSeconds")!!
-            if (call.argument<String>("authEndpoint") != null) options.channelAuthorizer =
-                HttpChannelAuthorizer(call.argument("authEndpoint"))
-            if (call.argument<String>("authorizer") != null) options.channelAuthorizer = this
-            if (call.argument<String>("proxy") != null) {
-                val (host, port) = call.argument<String>("proxy")!!.split(':')
-                options.proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port.toInt()))
+
+            // Cluster (varsa)
+            call.argument<String>("cluster")?.let { options.setCluster(it) }
+
+            // TLS (orijinal parametre)
+            call.argument<Boolean>("useTLS")?.let { options.isUseTLS = it }
+
+            // --- YENİ: Custom host/port/TLS (self-hosted Soketi / Laravel WebSockets) ---
+            call.argument<String>("host")?.let { if (it.isNotBlank()) options.setHost(it) }
+            call.argument<Int>("wsPort")?.let { options.setWsPort(it) }   // ör: 6001
+            call.argument<Int>("wssPort")?.let { options.setWssPort(it) } // ör: 443
+            // encrypted parametresi verildiyse TLS'i onunla override et
+            call.argument<Boolean>("encrypted")?.let { options.isUseTLS = it }
+            // ------------------------------------------------------------------------------
+
+            // Diğer opsiyonlar (mevcut)
+            call.argument<Long>("activityTimeout")?.let { options.activityTimeout = it }
+            call.argument<Long>("pongTimeout")?.let { options.pongTimeout = it }
+            call.argument<Int>("maxReconnectionAttempts")?.let { options.maxReconnectionAttempts = it }
+            call.argument<Int>("maxReconnectGapInSeconds")?.let { options.maxReconnectGapInSeconds = it }
+
+            // Authorizer (HTTP veya custom)
+            call.argument<String>("authEndpoint")?.let {
+                options.channelAuthorizer = HttpChannelAuthorizer(it)
             }
+            call.argument<String>("authorizer")?.let {
+                // Dart tarafında onAuthorizer varsa bunu işaretler
+                options.channelAuthorizer = this
+            }
+
+            // Proxy (opsiyonel)
+            call.argument<String>("proxy")?.let {
+                val parts = it.split(':')
+                if (parts.size == 2) {
+                    val host = parts[0]
+                    val port = parts[1].toIntOrNull() ?: 0
+                    options.proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
+                }
+            }
+
+            // Pusher instance
             pusher = Pusher(call.argument("apiKey"), options)
             Log.i(TAG, "Start $pusher")
             result.success(null)
@@ -327,4 +352,3 @@ class PusherChannelsFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAw
         onError(message, "", e)
     }
 }
-
