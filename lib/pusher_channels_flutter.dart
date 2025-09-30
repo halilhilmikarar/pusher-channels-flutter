@@ -103,6 +103,14 @@ class PusherChannelsFlutter {
     String? authTransport, // pusher-js only
     Map<String, Map<String, String>>? authParams, // pusher-js only
     bool? logToConsole, // pusher-js only
+
+    // --- YENİ: self-hosted Soketi/Laravel WebSockets için ---
+    String? host,
+    int? wsPort,
+    int? wssPort,
+    bool? encrypted,
+    // --------------------------------------------------------
+
     Function(String currentState, String previousState)?
         onConnectionStateChange,
     Function(String channelName, dynamic data)? onSubscriptionSucceeded,
@@ -127,6 +135,7 @@ class PusherChannelsFlutter {
     this.onMemberRemoved = onMemberRemoved;
     this.onAuthorizer = onAuthorizer;
     this.onSubscriptionCount = onSubscriptionCount;
+
     await methodChannel.invokeMethod('init', {
       "apiKey": apiKey,
       "cluster": cluster,
@@ -144,7 +153,14 @@ class PusherChannelsFlutter {
       "authEndpoint": authEndpoint,
       "authTransport": authTransport,
       "authParams": authParams,
-      "logToConsole": logToConsole
+      "logToConsole": logToConsole,
+
+      // --- YENİ: native'e aktarılacak alanlar ---
+      "host": host,
+      "wsPort": wsPort,
+      "wssPort": wssPort,
+      "encrypted": encrypted,
+      // ------------------------------------------
     });
   }
 
@@ -169,7 +185,6 @@ class PusherChannelsFlutter {
         switch (eventName) {
           case 'pusher:subscription_succeeded':
           case 'pusher_internal:subscription_succeeded':
-            // Depending on the platform implementation we get json or a Map.
             var decodedData = data is Map ? data : jsonDecode(data);
             decodedData?["presence"]?["hash"]?.forEach((userId_, userInfo) {
               var member = PusherMember(userId_, userInfo);
@@ -183,7 +198,6 @@ class PusherChannelsFlutter {
             break;
           case 'pusher:subscription_count':
           case 'pusher_internal:subscription_count':
-            // Depending on the platform implementation we get json or a Map.
             var decodedData = data is Map ? data : jsonDecode(data);
             var subscriptionCount = decodedData['subscription_count'];
             channels[channelName]?.subscriptionCount = subscriptionCount;
